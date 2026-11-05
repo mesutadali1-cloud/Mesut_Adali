@@ -1,0 +1,87 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.2cm]{geometry}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{listings}
+
+\lstset{basicstyle=\ttfamily\footnotesize, frame=single, numbers=left,
+        numberstyle=\tiny, breaklines=true, columns=fullflexible, showstringspaces=false}
+
+\title{DEP521E -- HW2 Part A\\Bilinear Element Model and Testing}
+\author{Mesut ADALI - 801262107}
+\date{29.10.2026}
+
+\begin{document}
+\maketitle
+
+\section{Method}
+The bilinear element has a primary stiffness $k_p$ and a secondary stiffness $k_s = k_2$:
+\[
+k_p = \frac{f_y}{d_y}, \qquad q_y = f_y - k_2 d_y
+\]
+The Top and Bottom Borders are the lines with slope $k_2$ through $(d_y, f_y)$ and $(-d_y, -f_y)$:
+\[
+F_{top}(x) = q_y + k_2 x, \qquad F_{bot}(x) = -q_y + k_2 x
+\]
+The force always stays between the two borders. The state parameter shows where the
+element is: $0$ = Interior Region, $1$ = Top Border, $-1$ = Bottom Border.
+For a step $\Delta x$ from $(x_i, f_i)$ the borders are evaluated at $x_{i+1} = x_i + \Delta x$ and:
+\begin{itemize}
+  \item \textbf{Interior Region:} $\Delta f = k_p\Delta x$. If $f_i + \Delta f$ goes beyond the Top
+        (Bottom) Border, then $\Delta f = F_{top} - f_i$ ($F_{bot} - f_i$) and the state becomes Top (Bottom).
+        Otherwise the state stays Interior.
+  \item \textbf{Top Border:} if $\Delta x \ge 0$, $\Delta f = k_s\Delta x$ and the state stays Top.
+        If $\Delta x < 0$, the element unloads with $\Delta f = k_p\Delta x$ and the state becomes Interior
+        (or Bottom, if it goes beyond the Bottom Border).
+  \item \textbf{Bottom Border:} same rules in the opposite direction.
+\end{itemize}
+The total force is $f_{i+1} = f_i + \Delta f$.
+
+\section{Code}
+\begin{itemize}
+  \item \texttt{bilinear(dy,fy,k2,x\_ini,f\_ini,dx,param\_a)}: applies the rules above and returns
+        the incremental force \texttt{df} and the new state \texttt{param\_a}.
+  \item Main part: starts from $x = 0$, $f = 0$, \texttt{param\_a = 0}, calls \texttt{bilinear}
+        for each step of the displacement history, adds \texttt{df} to the force and plots the results.
+  \item Parameters: $d_y = 1$, $f_y = 5$, $k_2 = 0.25$, so $k_p = 5$ and $q_y = 4.75$.
+  \item Input displacement: the 24-point history given in the assignment ($\Delta t = 1$ is used for plotting).
+\end{itemize}
+
+\section{Results}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.49\textwidth]{figures/Part1_Time_History.png}
+\includegraphics[width=0.49\textwidth]{figures/Part1_Hysteresis.png}
+\caption{Force time history (left) and hysteresis: displacement vs force (right).}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{rrrl|rrrl}
+\hline
+Step & $x$ & $f$ & State & Step & $x$ & $f$ & State \\
+\hline
+0  & 0.00  & 0.0000  & Interior & 12 & $-0.75$ & $-4.9375$ & Bottom \\
+1  & 0.50  & 2.5000  & Interior & 13 & $-1.50$ & $-5.1250$ & Bottom \\
+2  & 0.75  & 3.7500  & Interior & 14 & $-1.00$ & $-2.6250$ & Interior \\
+3  & 1.25  & 5.0625  & Top      & 15 & $-1.75$ & $-5.1875$ & Bottom \\
+4  & 1.50  & 5.1250  & Top      & 16 & $-2.00$ & $-5.2500$ & Bottom \\
+5  & 1.00  & 2.6250  & Interior & 17 & $-2.50$ & $-5.3750$ & Bottom \\
+6  & 1.75  & 5.1875  & Top      & 18 & $-2.25$ & $-4.1250$ & Interior \\
+7  & 0.75  & 0.1875  & Interior & 19 & $-1.75$ & $-1.6250$ & Interior \\
+8  & 0.25  & $-2.3125$ & Interior & 20 & $-1.00$ & 2.1250  & Interior \\
+9  & 0.50  & $-1.0625$ & Interior & 21 & $-0.25$ & 4.6875  & Top \\
+10 & 0.00  & $-3.5625$ & Interior & 22 & 0.00  & 4.7500  & Top \\
+11 & $-0.50$ & $-4.8750$ & Bottom & 23 & 1.00  & 5.0000  & Top \\
+\hline
+\end{tabular}
+\caption{Displacement, force and state at each step.}
+\end{table}
+
+\appendix
+\section{Python Code}
+\lstinputlisting[language=Python]{DEP521E_HW2_PART_1.py}
+
+\end{document}

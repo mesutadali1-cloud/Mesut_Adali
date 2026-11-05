@@ -1,0 +1,277 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=2.3cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{float}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{caption}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,urlcolor=blue!50!black]{hyperref}
+
+% ---- edit these ----
+\newcommand{\studentname}{Mesut}
+\newcommand{\studentid}{}
+\newcommand{\coursename}{DEP 521E -- Special Topics in Earthquake Engineering, Homework 2}
+
+\lstdefinestyle{py}{
+  language=Python,
+  basicstyle=\ttfamily\footnotesize,
+  keywordstyle=\color{blue!70!black}\bfseries,
+  commentstyle=\color{green!45!black}\itshape,
+  stringstyle=\color{red!60!black},
+  numbers=left, numberstyle=\tiny\color{gray}, numbersep=6pt,
+  frame=single, rulecolor=\color{gray!60},
+  breaklines=true, showstringspaces=false, columns=fullflexible,
+  backgroundcolor=\color{gray!4}
+}
+
+\title{\textbf{Part C: Bilinear Element Model and Testing\\Coded with AI}}
+\author{\studentname\ifx\studentid\empty\else\ (\studentid)\fi\\[2pt]\small \coursename}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This report presents a Python implementation of a rate-independent bilinear hysteretic element,
+developed with the help of an AI coding assistant as required in Part~C of the assignment.
+The element is described by a primary stiffness $k_p$, a secondary stiffness $k_s$ and two
+parallel border lines that bound the force. The code is driven through the displacement history
+given in the assignment, and the resulting displacement and force time histories and the
+force--displacement hysteresis are reported. The results are checked against hand calculations
+and against an independent fine-step path-tracing solution.
+\end{abstract}
+
+%==============================================================================
+\section{Problem definition}
+The bilinear element of Fig.~1 in the assignment is defined by the yield displacement $d_y$,
+the yield force $f_y$ and the secondary stiffness $k_s$. The primary (elastic) stiffness and the
+characteristic strength (the force intercept of the borders) are
+\begin{equation}
+  k_p = \frac{f_y}{d_y}, \qquad q_y = f_y - k_s d_y .
+\end{equation}
+At any displacement $x$ the force is bounded by the \emph{top} and \emph{bottom} borders,
+\begin{equation}
+  F_{\text{top}}(x) = q_y + k_s x, \qquad F_{\text{bot}}(x) = -q_y + k_s x ,
+  \label{eq:borders}
+\end{equation}
+and the region between them is the \emph{interior region}, in which the element responds with
+the primary stiffness $k_p$. On a border, loading away from the interior follows the border
+with stiffness $k_s$, while unloading moves back into the interior with stiffness $k_p$.
+
+The function required by the assignment has the form
+\begin{center}
+\texttt{df, param\_a = bilinear(dy, fy, k2, x\_ini, f\_ini, dx, param\_a)}
+\end{center}
+where \texttt{x\_ini} and \texttt{f\_ini} are the displacement and force at the start of the step,
+\texttt{dx} is the displacement increment and \texttt{param\_a} carries the state of the element
+(\texttt{interior}, \texttt{top} or \texttt{bottom}). The function returns the force increment
+\texttt{df} and the updated state.
+
+%==============================================================================
+\section{Formulation}
+\subsection{Elastic trial and return to the border}
+For a step from $x_i$ to $x_{i+1} = x_i + \Delta x$, an elastic trial force is computed with the
+primary stiffness,
+\begin{equation}
+  F^{\text{trial}} = F_i + k_p\,\Delta x .
+\end{equation}
+Because $k_s < k_p$, the trial force can lie outside the borders only if the element has yielded
+during the step. In that case the step must end on the border that was crossed. Hence
+\begin{equation}
+  F_{i+1} =
+  \begin{cases}
+    F_{\text{top}}(x_{i+1}), & F^{\text{trial}} \ge F_{\text{top}}(x_{i+1}) \quad\text{(state: top)},\\[2pt]
+    F_{\text{bot}}(x_{i+1}), & F^{\text{trial}} \le F_{\text{bot}}(x_{i+1}) \quad\text{(state: bottom)},\\[2pt]
+    F^{\text{trial}},        & \text{otherwise} \quad\text{(state: interior)},
+  \end{cases}
+  \label{eq:update}
+\end{equation}
+and $\Delta F = F_{i+1} - F_i$.
+
+This compact rule reproduces every case listed in the hint of the assignment:
+\begin{itemize}
+  \item \textbf{Interior, no yielding:} the trial stays between the borders and $\Delta F = k_p\Delta x$.
+  \item \textbf{Interior, yielding during the step:} the trial passes a border; the force is placed
+        on the border, which is the same as moving with $k_p$ up to the border and with $k_s$ afterwards.
+  \item \textbf{On the top border, $\Delta x > 0$:} $F^{\text{trial}} = F_{\text{top}}(x_i) + k_p\Delta x
+        > F_{\text{top}}(x_{i+1})$, so $\Delta F = k_s\Delta x$ and the state stays \texttt{top}.
+  \item \textbf{On the top border, $\Delta x < 0$:} the element unloads with $k_p$ into the interior;
+        if the unloading is large enough to reach the bottom border, the step ends on the bottom border.
+  \item The bottom border is handled symmetrically.
+\end{itemize}
+A zero increment returns $\Delta F = 0$ and leaves the state unchanged, which avoids a state
+decision based on round-off when the point lies exactly on a border.
+
+The element requires $k_s < k_p$ (otherwise the borders would be steeper than the elastic branch
+and the rule above would not hold); the function raises an error if this is violated.
+
+\subsection{Algorithm}
+\begin{algorithm}[H]
+\caption{Bilinear element, one displacement step}
+\begin{algorithmic}[1]
+\Require $d_y, f_y, k_s, x_i, F_i, \Delta x$, state
+\State $k_p \gets f_y/d_y$, \quad $q_y \gets f_y - k_s d_y$
+\If{$\Delta x = 0$} \Return $0$, state \EndIf
+\State $x_{i+1} \gets x_i + \Delta x$
+\State $F_{\text{top}} \gets q_y + k_s x_{i+1}$, \quad $F_{\text{bot}} \gets -q_y + k_s x_{i+1}$
+\State $F^{\text{trial}} \gets F_i + k_p\Delta x$
+\If{$F^{\text{trial}} \ge F_{\text{top}}$} \Return $F_{\text{top}} - F_i$, \texttt{top}
+\ElsIf{$F^{\text{trial}} \le F_{\text{bot}}$} \Return $F_{\text{bot}} - F_i$, \texttt{bottom}
+\Else\ \Return $F^{\text{trial}} - F_i$, \texttt{interior}
+\EndIf
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Program structure}
+The script \texttt{bilinear\_element.py} (Appendix~\ref{app:code}) contains
+\begin{itemize}
+  \item \texttt{bilinear(...)}: the element function described above;
+  \item \texttt{run\_history(x, dy, fy, k2)}: drives the element through a displacement history,
+        starting from $F = 0$ in the interior region, and accumulates $F_{i+1} = F_i + \Delta F$;
+  \item \texttt{save\_history\_plot}, \texttt{save\_hysteresis\_plot}: the figures;
+  \item \texttt{main()}: the test case of the assignment and the printed results table.
+\end{itemize}
+
+%==============================================================================
+\section{Use of AI}
+As required in Part~C, the code was developed with an AI coding assistant (Claude, Anthropic,
+used through Claude Code). The assignment text was given to the assistant, which wrote the
+element function, the driver, the plotting functions and a separate verification script, ran
+them and checked the figures. The formulation in Section~2 and the results in Section~4
+were reviewed by the student. The verification described in Section~4.3 was used to confirm
+that the AI-generated code is correct rather than relying on the code by inspection.
+
+%==============================================================================
+\section{Test of the bilinear element}
+\subsection{Input}
+The test parameters are listed in Table~\ref{tab:param}. The input displacement history is
+\begin{align*}
+x = [\,&0,\ 0.5,\ 0.75,\ 1.25,\ 1.5,\ 1.0,\ 1.75,\ 0.75,\ 0.25,\ 0.5,\ 0.0,\ -0.5,\\
+       &-0.75,\ -1.5,\ -1.0,\ -1.75,\ -2.0,\ -2.5,\ -2.25,\ -1.75,\ -1.0,\ -0.25,\ 0,\ 1.0\,].
+\end{align*}
+No time step is given, so the time axis of the time histories is the step number.
+
+\begin{table}[H]
+\centering
+\caption{Input and derived parameters.}
+\label{tab:param}
+\begin{tabular}{lcc}
+\toprule
+Parameter & Symbol & Value\\
+\midrule
+Yield displacement      & $d_y$ & 1\\
+Yield force             & $f_y$ & 5\\
+Secondary stiffness     & $k_s$ & 0.25\\
+\midrule
+Primary stiffness       & $k_p = f_y/d_y$       & 5\\
+Characteristic strength & $q_y = f_y - k_s d_y$ & 4.75\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Results}
+The computed forces and states are listed in Table~\ref{tab:results}. The displacement and force
+time histories are shown in Figs.~\ref{fig:disp} and~\ref{fig:force}, and the hysteresis loop
+with the two borders in Fig.~\ref{fig:hyst}.
+
+\begin{table}[H]
+\centering
+\caption{Force and state at each step.}
+\label{tab:results}
+\small
+\begin{tabular}{rrrl@{\hspace{2.2em}}rrrl}
+\toprule
+Step & $x$ & $F$ & State & Step & $x$ & $F$ & State\\
+\midrule
+ 0 &  0.00 &  0.0000 & interior & 12 & $-0.75$ & $-4.9375$ & bottom\\
+ 1 &  0.50 &  2.5000 & interior & 13 & $-1.50$ & $-5.1250$ & bottom\\
+ 2 &  0.75 &  3.7500 & interior & 14 & $-1.00$ & $-2.6250$ & interior\\
+ 3 &  1.25 &  5.0625 & top      & 15 & $-1.75$ & $-5.1875$ & bottom\\
+ 4 &  1.50 &  5.1250 & top      & 16 & $-2.00$ & $-5.2500$ & bottom\\
+ 5 &  1.00 &  2.6250 & interior & 17 & $-2.50$ & $-5.3750$ & bottom\\
+ 6 &  1.75 &  5.1875 & top      & 18 & $-2.25$ & $-4.1250$ & interior\\
+ 7 &  0.75 &  0.1875 & interior & 19 & $-1.75$ & $-1.6250$ & interior\\
+ 8 &  0.25 & $-2.3125$ & interior & 20 & $-1.00$ &  2.1250 & interior\\
+ 9 &  0.50 & $-1.0625$ & interior & 21 & $-0.25$ &  4.6875 & top\\
+10 &  0.00 & $-3.5625$ & interior & 22 &  0.00 &  4.7500 & top\\
+11 & $-0.50$ & $-4.8750$ & bottom & 23 &  1.00 &  5.0000 & top\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.86\textwidth]{displacement_history.png}
+  \caption{Displacement time history.}
+  \label{fig:disp}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.86\textwidth]{force_history.png}
+  \caption{Force time history.}
+  \label{fig:force}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.78\textwidth]{hysteresis.png}
+  \caption{Hysteresis: force vs.\ displacement. Dashed lines are the top and bottom borders,
+           Eq.~\eqref{eq:borders}.}
+  \label{fig:hyst}
+\end{figure}
+
+\paragraph{Discussion.}
+From step~0 to step~2 the element is elastic with slope $k_p = 5$. Yielding occurs during step~3
+(at $x = 1$, $F = 5$) and the response then follows the top border with slope $k_s = 0.25$.
+Unloading in step~5 and step~7 follows the elastic slope; in step~7 the displacement decreases by
+1.0, which changes the force by $-5$ and leaves the point inside the interior region because the
+elastic range between the borders is $2q_y = 9.5$ in force. Reloading in step~6 reaches the top
+border again. In the negative direction the element yields on the bottom border during step~11
+and reaches its minimum force $F = -5.375$ at the peak displacement $x = -2.5$. Reloading from
+step~18 to step~21 crosses the whole interior region with slope $k_p$ and reaches the top border
+during step~21. The hysteresis loop of Fig.~\ref{fig:hyst} is a parallelogram whose elastic
+branches are parallel to each other and whose plastic branches lie on the two borders, which is
+the expected bilinear behaviour.
+
+\subsection{Verification}
+The AI-generated code was checked in three independent ways:
+\begin{enumerate}
+  \item \textbf{Hand calculation.} Steps 1--11 were computed by hand. For example, in step~3 the
+        trial force is $3.75 + 5(0.5) = 6.25 > F_{\text{top}}(1.25) = 4.75 + 0.25(1.25) = 5.0625$,
+        so $F = 5.0625$; in step~11 the trial force is $-3.5625 - 5(0.5) = -6.0625 <
+        F_{\text{bot}}(-0.5) = -4.875$, so $F = -4.875$. All hand values agree exactly with
+        Table~\ref{tab:results}.
+  \item \textbf{Independent path tracing.} Each step was divided into 20\,000 sub-steps and the
+        force was integrated with the incremental stiffness ($k_s$ when loading outward on a border,
+        $k_p$ otherwise). The largest difference from the bilinear function is about
+        $8\times10^{-12}$.
+  \item \textbf{Consistency checks.} At every step the force lies between the two borders, and
+        every step reported as \texttt{top} or \texttt{bottom} lies exactly on that border.
+\end{enumerate}
+
+%==============================================================================
+\section{Conclusions}
+\begin{itemize}
+  \item A bilinear element was implemented in Python with the signature required by the
+        assignment, using an elastic trial and a return to the crossed border.
+  \item The element was tested with the given parameters ($d_y = 1$, $f_y = 5$, $k_s = 0.25$)
+        and displacement history. The maximum and minimum forces are $5.1875$ (at $x = 1.75$)
+        and $-5.375$ (at $x = -2.5$).
+  \item The results agree with hand calculations and with an independent fine-step solution,
+        so the AI-generated code is considered correct for this test.
+\end{itemize}
+
+%==============================================================================
+\appendix
+\section{Python code}\label{app:code}
+\lstinputlisting[style=py]{bilinear_element.py}
+
+\end{document}
